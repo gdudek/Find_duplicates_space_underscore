@@ -8,8 +8,8 @@ if [[ -z "${BASH_VERSION:-}" ]]; then
 fi
 
 # Find files in the given directory (default: current dir) whose names only differ
-# by spaces vs underscores and whose sizes match within a tolerance, or whose
-# audio streams are identical (ignoring cover art/tags).
+# by spaces vs underscores and punctuation (case-insensitive), and whose sizes
+# match within a tolerance, or whose audio streams are identical (ignoring cover art/tags).
 # Usage: ./find_space_underscore_dupes.sh [dir] [tolerance_bytes]
 #        ./find_space_underscore_dupes.sh --dir DIR --tolerance BYTES [--delete=underscores|spaces|smaller|larger] [--audio-hash=probe|stream|samples|off] [--yes]
 #        ./find_space_underscore_dupes.sh -h|--help
@@ -154,6 +154,25 @@ file_size() {
   fi
 }
 
+human_size() {
+  # Convert bytes to human-readable (base-1024).
+  local bytes="$1"
+  local units=("B" "KB" "MB" "GB" "TB" "PB")
+  local i=0
+  local whole="$bytes"
+  local frac=0
+  while (( whole >= 1024 && i < ${#units[@]}-1 )); do
+    frac=$(( (whole % 1024) * 100 / 1024 ))
+    whole=$(( whole / 1024 ))
+    ((i++))
+  done
+  if (( i == 0 )); then
+    printf "%d%s" "$whole" "${units[$i]}"
+  else
+    printf "%d.%02d%s" "$whole" "$frac" "${units[$i]}"
+  fi
+}
+
 audio_md5() {
   # Hash only the audio stream to ignore cover art/tags.
   # mode=stream hashes compressed packets (fast); mode=samples hashes decoded audio (slow).
@@ -202,7 +221,19 @@ declare -A files_for_norm
 while IFS= read -r -d '' path; do
   size=$(file_size "$path")
   name=$(basename "$path")
-  norm=${name// /_}   # canonical form: spaces -> underscores
+  norm=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
+  norm=${norm// /_}
+  norm=${norm//\\/}
+  norm=${norm//\//}   # defensive; names shouldn't contain '/'
+  norm=${norm//,/}
+  norm=${norm//./}
+  norm=${norm//:/}
+  norm=${norm//-/_}
+  norm=${norm//_/}    # strip underscores
+  norm=${norm// /}    # strip spaces
+  # normalize multiple punctuation/space variants to the same key
+  # final key is alnum only
+  norm=$(printf '%s' "$norm" | tr -cd '[:alnum:]')
   key="$norm|$size"
   groups[$key]+="$path"$'\n'
   sizes_for_norm["$norm"]+="$size"$'\n'
@@ -289,17 +320,22 @@ for norm in "${!sizes_for_norm[@]}"; do
     mapfile -t uniq_names < <(printf '%s\n' "${uniq_paths[@]##*/}" | sort -u)
     if (( ${#uniq_names[@]} > 1 )); then
       found=$((found + 1))
+      min_size=${uniq_sizes[0]}
+      max_size=${uniq_sizes[${#uniq_sizes[@]}-1]}
+      size_diff=$(( max_size - min_size ))
+      min_h=$(human_size "$min_size")
+      max_h=$(human_size "$max_size")
       echo "---"
       if [[ "$match_reason" == "size" ]]; then
-        echo "Normalized: $norm | Sizes: ${uniq_sizes[*]} (tolerance ${tolerance} bytes) | Match: size"
+        echo "Normalized: $norm | Sizes: ${min_h}..${max_h} (diff ${size_diff} bytes) | Match: size"
       elif [[ "$match_reason" == "audio-probe" ]]; then
-        echo "Normalized: $norm | Sizes: ${uniq_sizes[*]} | Match: audio probe"
+        echo "Normalized: $norm | Sizes: ${min_h}..${max_h} (diff ${size_diff} bytes) | Match: audio probe"
       elif [[ "$match_reason" == "audio-stream" ]]; then
-        echo "Normalized: $norm | Sizes: ${uniq_sizes[*]} | Match: audio hash (stream)"
+        echo "Normalized: $norm | Sizes: ${min_h}..${max_h} (diff ${size_diff} bytes) | Match: audio hash (stream)"
       elif [[ "$match_reason" == "audio-samples" ]]; then
-        echo "Normalized: $norm | Sizes: ${uniq_sizes[*]} | Match: audio hash (samples)"
+        echo "Normalized: $norm | Sizes: ${min_h}..${max_h} (diff ${size_diff} bytes) | Match: audio hash (samples)"
       else
-        echo "Normalized: $norm | Sizes: ${uniq_sizes[*]} | Match: unknown"
+        echo "Normalized: $norm | Sizes: ${min_h}..${max_h} (diff ${size_diff} bytes) | Match: unknown"
       fi
       for n in "${uniq_names[@]}"; do
         echo "  - $n"
