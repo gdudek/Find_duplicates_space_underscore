@@ -1,6 +1,6 @@
 # Find duplicates space underscore
 
-Utility script to find duplicate files whose names differ only by spaces vs underscores, using size tolerance and audio matching, with optional cleanup.
+Utility script to find duplicate files whose names differ only by spaces/underscores and other punctuation, using size tolerance and audio matching, with optional cleanup.
 
 ## Usage
 
@@ -34,7 +34,7 @@ If `ffprobe` is missing, audio signature matching is disabled and only size tole
 
 ## Options and behavior
 
-The script groups files whose names differ only by spaces vs underscores **and punctuation** (case-insensitive). It then decides whether to report a group as a duplicate based on size tolerance and/or audio matching.
+The script groups files whose names differ only by spaces/underscores **and other punctuation** (case-insensitive). It then decides whether to report a group as a duplicate based on size tolerance and/or audio matching.
 
 ### `--dir DIR`
 Directory to scan (non-recursive). Default: current directory.
@@ -79,7 +79,7 @@ Print usage and exit.
 
 ## How flags interact
 
-1) **Grouping** is always by normalized name (case-insensitive; spaces/underscores/punctuation like `\\ / , . : -` are ignored).  
+1) **Grouping** is always by normalized name (case-insensitive; spaces/underscores and punctuation like `\\ / , . : -` are ignored).  
 2) A group is **reported** if:
    - any pair is within size tolerance **OR**
    - audio matching (per `--audio-hash`) finds identical audio.  
