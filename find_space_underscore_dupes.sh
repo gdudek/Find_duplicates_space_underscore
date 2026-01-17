@@ -11,7 +11,7 @@ fi
 # by spaces vs underscores and punctuation (case-insensitive), and whose sizes
 # match within a tolerance, or whose audio streams are identical (ignoring cover art/tags).
 # Usage: ./find_space_underscore_dupes.sh [dir] [tolerance_bytes]
-#        ./find_space_underscore_dupes.sh --dir DIR --tolerance BYTES [--delete=underscores|spaces|smaller|larger] [--audio-hash=probe|stream|samples|off] [--yes]
+#        ./find_space_underscore_dupes.sh --dir DIR --tolerance BYTES [--recursive] [--approx-even-for-non-media] [--delete=underscores|spaces|smaller|larger] [--audio-hash=probe|stream|samples|off] [--yes]
 #        ./find_space_underscore_dupes.sh -h|--help
 
 dir="."
@@ -21,20 +21,24 @@ tolerance_set=0
 delete_mode=""
 assume_yes=0
 audio_hash_mode="probe"
+recursive=0
+approx_non_media=0
 
 for arg in "$@"; do
   case "$arg" in
     -h|--help)
       cat <<'USAGE'
 Usage:
-  find_space_underscore_dupes.sh [dir] [tolerance_bytes] [--delete=underscores|spaces|smaller|larger] [--audio-hash=probe|stream|samples|off] [--yes]
-  find_space_underscore_dupes.sh --dir DIR --tolerance BYTES [--delete=underscores|spaces|smaller|larger] [--audio-hash=probe|stream|samples|off] [--yes]
+  find_space_underscore_dupes.sh [dir] [tolerance_bytes] [--recursive] [--approx-even-for-non-media] [--delete=underscores|spaces|smaller|larger] [--audio-hash=probe|stream|samples|off] [--yes]
+  find_space_underscore_dupes.sh --dir DIR --tolerance BYTES [--recursive] [--approx-even-for-non-media] [--delete=underscores|spaces|smaller|larger] [--audio-hash=probe|stream|samples|off] [--yes]
   find_space_underscore_dupes.sh -h|--help
 
 Notes:
   - Matches files whose names only differ by spaces vs underscores.
   - Reports matches if sizes are within tolerance OR audio streams are identical (ignores cover art/tags).
   - --delete removes duplicates after printing; use --yes to skip prompts.
+  - --recursive scans subdirectories and matches across the full subtree.
+  - For non-media files, size must match exactly unless --approx-even-for-non-media is set.
   - --audio-hash=probe uses ffprobe audio params (fast, heuristic).
   - --audio-hash=stream hashes the compressed audio stream (slow for long files).
   - --audio-hash=samples hashes decoded audio samples (slowest, strict).
@@ -57,6 +61,12 @@ USAGE
     --tolerance)
       need_tol=1
       continue
+      ;;
+    --recursive)
+      recursive=1
+      ;;
+    --approx-even-for-non-media)
+      approx_non_media=1
       ;;
     --audio-hash=*)
       audio_hash_mode="${arg#*=}"
@@ -189,6 +199,29 @@ audio_md5() {
   fi
 }
 
+is_media_file() {
+  local f="$1"
+  local ext="${f##*.}"
+  ext=$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')
+  case "$ext" in
+    # audio
+    mp3|m4a|m4b|flac|wav|ogg|opus|aac|aax|aaxc|aa|wma|alac)
+      return 0
+      ;;
+    # video
+    mp4|mkv|mov|avi|m4v|wmv|webm|flv|mpeg|mpg|3gp)
+      return 0
+      ;;
+    # images
+    jpg|jpeg|png|gif|webp|bmp|tiff|tif|heic|heif)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 audio_probe_sig() {
   local f="$1"
   if [[ -z "$FFPROBE" ]]; then
@@ -216,8 +249,15 @@ audio_probe_sig() {
 declare -A groups
 declare -A sizes_for_norm
 declare -A files_for_norm
+declare -A media_for_norm
 
-# Only look at files directly inside the directory (no recursion).
+if (( recursive )); then
+  find_cmd=(find "$dir" -type f -print0)
+else
+  find_cmd=(find "$dir" -maxdepth 1 -type f -print0)
+fi
+
+# Collect files
 while IFS= read -r -d '' path; do
   size=$(file_size "$path")
   name=$(basename "$path")
@@ -238,7 +278,12 @@ while IFS= read -r -d '' path; do
   groups[$key]+="$path"$'\n'
   sizes_for_norm["$norm"]+="$size"$'\n'
   files_for_norm["$norm"]+="$path"$'\n'
-done < <(find "$dir" -maxdepth 1 -type f -print0)
+  if is_media_file "$name"; then
+    media_for_norm["$norm"]+="1"$'\n'
+  else
+    media_for_norm["$norm"]+="0"$'\n'
+  fi
+done < <("${find_cmd[@]}")
 
 confirm_delete() {
   local f="$1"
@@ -253,6 +298,14 @@ found=0
 for norm in "${!sizes_for_norm[@]}"; do
   mapfile -t sizes < <(printf '%s' "${sizes_for_norm[$norm]}")
   mapfile -t uniq_sizes < <(printf '%s\n' "${sizes[@]}" | sort -un)
+  mapfile -t media_flags < <(printf '%s' "${media_for_norm[$norm]}")
+  all_media=1
+  for m in "${media_flags[@]}"; do
+    if [[ "$m" != "1" ]]; then
+      all_media=0
+      break
+    fi
+  done
   if (( ${#uniq_sizes[@]} < 2 )); then
     continue
   fi
@@ -263,17 +316,25 @@ for norm in "${!sizes_for_norm[@]}"; do
     for ((j=i+1; j<${#uniq_sizes[@]}; j++)); do
       diff=$(( uniq_sizes[j] - uniq_sizes[i] ))
       (( diff < 0 )) && diff=$(( -diff ))
-      if (( diff <= tolerance )); then
-        match=1
-        match_reason="size"
-        break
+      if (( all_media == 0 && approx_non_media == 0 )); then
+        if (( diff == 0 )); then
+          match=1
+          match_reason="size"
+          break
+        fi
+      else
+        if (( diff <= tolerance )); then
+          match=1
+          match_reason="size"
+          break
+        fi
       fi
     done
     (( match )) && break
   done
   # If size doesn't match, fall back to audio hash (if ffmpeg exists).
   if (( ! match )); then
-    if [[ "$audio_hash_mode" == "probe" ]]; then
+    if (( all_media == 1 )) && [[ "$audio_hash_mode" == "probe" ]]; then
       if [[ -n "$FFPROBE" ]]; then
         mapfile -t files < <(printf '%s' "${files_for_norm[$norm]}")
         declare -A sig_counts=()
@@ -290,7 +351,7 @@ for norm in "${!sizes_for_norm[@]}"; do
           fi
         done
       fi
-    elif [[ -n "$FFMPEG" && "$audio_hash_mode" != "off" ]]; then
+    elif (( all_media == 1 )) && [[ -n "$FFMPEG" && "$audio_hash_mode" != "off" ]]; then
       mapfile -t files < <(printf '%s' "${files_for_norm[$norm]}")
       declare -A hash_counts=()
       for f in "${files[@]}"; do
@@ -337,9 +398,15 @@ for norm in "${!sizes_for_norm[@]}"; do
       else
         echo "Normalized: $norm | Sizes: ${min_h}..${max_h} (diff ${size_diff} bytes) | Match: unknown"
       fi
-      for n in "${uniq_names[@]}"; do
-        echo "  - $n"
-      done
+      if (( recursive )); then
+        for p in "${uniq_paths[@]}"; do
+          echo "  - $p"
+        done
+      else
+        for n in "${uniq_names[@]}"; do
+          echo "  - $n"
+        done
+      fi
 
       if [[ -n "$delete_mode" ]]; then
         to_delete=()

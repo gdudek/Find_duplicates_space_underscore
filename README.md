@@ -7,6 +7,8 @@ Utility script to find duplicate files whose names differ only by spaces/undersc
 ```bash
 ./find_space_underscore_dupes.sh --dir . --tolerance 1024
 ./find_space_underscore_dupes.sh --dir . --tolerance 0 --delete
+./find_space_underscore_dupes.sh --dir /path/to/root --recursive --tolerance 1024
+./find_space_underscore_dupes.sh --dir /path/to/root --recursive --tolerance 1024 --approx-even-for-non-media
 ```
 
 Run `./find_space_underscore_dupes.sh --help` for full options.
@@ -43,6 +45,11 @@ Directory to scan (non-recursive). Default: current directory.
 Maximum size difference (bytes) to still consider files duplicates **by size**. Default: `0`.
 
 Justification: some outputs only differ by ID3 padding or cover art. A small tolerance lets those collapse without relying on audio signatures.
+
+Note: by default, this tolerance is only applied to **media files** (audio/video/images). Non-media files require exact size matches unless `--approx-even-for-non-media` is set.
+
+### `--approx-even-for-non-media`
+Allow size tolerance matching for non-media files too. Use with care if you have text/code files where byte-exact identity matters.
 
 ### `--audio-hash=probe|stream|samples|off`
 Controls how audio equivalence is detected when size does **not** match:
@@ -83,8 +90,11 @@ Print usage and exit.
 2) A group is **reported** if:
    - any pair is within size tolerance **OR**
    - audio matching (per `--audio-hash`) finds identical audio.  
-3) If `--delete` is set, deletion is applied **after** a group is reported.
+3) Size tolerance applies only to media files unless `--approx-even-for-non-media` is set.  
+4) If `--delete` is set, deletion is applied **after** a group is reported.
 
 Recommended defaults:
 - For large libraries: `--audio-hash=probe` (default) + small `--tolerance` (e.g., 1024).
 - For exact audio verification: `--audio-hash=stream` or `--audio-hash=samples`.
+### `--recursive`
+Scan the full subtree under `--dir` and match duplicates across different directories.
