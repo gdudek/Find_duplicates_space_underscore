@@ -68,6 +68,10 @@ Controls how audio equivalence is detected when size does **not** match:
 
 - `off`: disables audio matching and only uses size tolerance.
 
+### `--recursive`
+Scan the full subtree under `--dir` and match duplicates across different directories.
+When enabled, output lists full paths for duplicates.
+
 ### `--delete=underscores|spaces|smaller|larger`
 After printing matches, delete one side of each duplicate group:
 
@@ -93,8 +97,9 @@ Print usage and exit.
 3) Size tolerance applies only to media files unless `--approx-even-for-non-media` is set.  
 4) If `--delete` is set, deletion is applied **after** a group is reported.
 
+Output notes:
+- Sizes are shown as a human-readable range (e.g., `1.63GB..1.64GB`) plus the exact byte difference.
+
 Recommended defaults:
 - For large libraries: `--audio-hash=probe` (default) + small `--tolerance` (e.g., 1024).
 - For exact audio verification: `--audio-hash=stream` or `--audio-hash=samples`.
-### `--recursive`
-Scan the full subtree under `--dir` and match duplicates across different directories.
